@@ -1,0 +1,184 @@
+install.packages("tidycensus")
+library(tidycensus)
+library(tidyverse)
+library(magrittr)
+library(tigris)
+library(factoextra)
+Sys.getenv("CENSUS_API_KEY") 
+
+acs_il_c <- get_acs(geography = "county", 
+                    variables = c("NAME", 
+                                  "B01003_001E", 
+                                  "B19013_001E", 
+                                  "B19301_001E"), 
+                    state = "illinois", 
+                    year = 2016)
+
+acs_il_c <- acs_il_c[-5] 
+
+acs_il_c <- acs_il_c %>% 
+                pivot_wider(names_from = variable, 
+                            values_from = estimate)
+
+colnames(acs_il_c)[colnames(acs_il_c) == "B01003_001"] <- 'Population'
+colnames(acs_il_c)[colnames(acs_il_c) == "B19013_001"] <- 'Income2'
+colnames(acs_il_c)[colnames(acs_il_c) == "B19301_001"] <- 'Income'
+
+head(acs_il_c)
+il_map <- counties(state = "Illinois", cb = TRUE, class = "sf")
+head(il_map)
+
+acs_map <- il_map %>% 
+        left_join(x = ., y = acs_il_c, by = "GEOID")
+
+        {r, echo=FALSE}
+ggplot() +   
+  geom_sf(data = acs_map, aes(fill = income), color = "black", size = 1) +
+  scale_fill_distiller(palette = "YlOrBr", trans = "reverse") + 
+  labs(fill = "Income") +
+  theme_minimal()
+
+  hclust_d <- dist(acs_map)
+hc_ward <- hclust(hclust_d, method = "ward.D2")
+
+plot(hc_ward, main = "Ward", xlab = "", sub = "")  
+rect.hclust(hc_ward,       
+            k = 6, 
+            border = "blue")
+cutree(hc_ward, 6)   
+
+acs_map <- acs_map %>% 
+         mutate(cluster = cutree(hc_ward, 6))  
+
+
+ggplot() +   
+  geom_sf(data = acs_map, aes(fill = as.factor(cluster)), color = "black", size = 1) +
+  scale_fill_viridis_d(option = "magma") + 
+  labs(fill = "Cluster") +
+  theme_minimal()
+hclust_d <- dist(acs_map)
+hc_ward <- hclust(hclust_d, method = "ward.D2")
+
+plot(hc_ward, main = "Ward", xlab = "", sub = "")  
+rect.hclust(hc_ward,       
+            k = 6, 
+            border = "blue")
+cutree(hc_ward, 6)   
+
+acs_map <- acs_map %>% 
+         mutate(cluster = cutree(hc_ward, 6))  
+
+
+ggplot() +   
+  geom_sf(data = acs_map, aes(fill = as.factor(cluster)), color = "black", size = 1) +
+  scale_fill_viridis_d(option = "magma") + 
+  labs(fill = "Cluster") +
+  theme_minimal()
+acs_il_t <- get_acs(geography = "tract", 
+                    variables = c("NAME", 
+                                  "B01003_001E", 
+                                  "B19013_001E", 
+                                  "B19301_001E"), 
+                    state = "illinois", 
+                    year = 2016)
+
+acs_il_t <- acs_il_t[-5] 
+acs_il_t <- acs_il_t %>% 
+                pivot_wider(names_from = variable, 
+                            values_from = estimate)
+
+colnames(acs_il_t)[colnames(acs_il_t) == "B01003_001"] <- "Population"
+colnames(acs_il_t)[colnames(acs_il_t) == "B19013_001"] <- "Income2"
+colnames(acs_il_t)[colnames(acs_il_t) == "B19301_001"] <- "Income"
+acs_il_t <- na.omit(acs_il_t)
+acs_il_t_num <- acs_il_t[sapply(acs_il_t, is.numeric)]
+fviz_nbclust(acs_il_t_num, 
+             kmeans, 
+             method = "wss", 
+             k.max = 25)
+k_il <- kmeans(acs_il_t_num, 6)
+acs_il_t$cluster <- k_il$cluster
+
+tracts_map <- tracts(state = "Illinois", cb = TRUE, class = "sf")
+
+acs_tracts_map <- tracts_map %>% 
+        left_join(x = ., y = acs_il_t, by = "GEOID")
+
+ggplot() +
+  geom_sf(data = acs_tracts_map, aes(fill = as.factor(cluster)), color = "blue", size = 1) +
+  scale_fill_viridis_d(option = "magma") + 
+  labs(fill = "Cluster") +
+  theme_minimal()
+
+  acs_tracts_map$COUNTYFP <- as.numeric(acs_tracts_map$COUNTYFP)
+
+cluster_summary <- acs_tracts_map %>%
+  group_by(cluster) %>%
+  summarise(
+    mean_pop = mean(pop, na.rm = TRUE),
+    mean_hh_income = mean(hh_income, na.rm = TRUE),
+    mean_pc_income = mean(income, na.rm = TRUE),
+    most_frequent_county = COUNTYFP[which.max(table(COUNTYFP))]
+  )
+  head(cluster_summary, 5)
+
+  automate_kmeans <- function(K, data, columns_to_cluster = NULL, visualize = TRUE) {
+  # Check for valid inputs
+  if (!is.numeric(K) || K <= 0) {
+    stop("K must be a positive numeric value.")
+  }
+  
+  if (is.null(columns_to_cluster)) {
+    
+    data_to_cluster <- data %>%
+      select(where(is.numeric)) %>%
+      na.omit()
+  } else {
+    # Specified columns
+    data_to_cluster <- data %>%
+      select(all_of(columns_to_cluster)) %>%
+      select(where(is.numeric)) %>%
+      na.omit()
+  }
+  
+  # Validity Check
+  if (ncol(data_to_cluster) == 0) {
+    stop("No valid numeric columns found for clustering.")
+  }
+  
+  
+  kmeans_result <- kmeans(as.matrix(data_to_cluster), centers = K, nstart = 25)
+  
+ 
+  clustered_data <- data %>%
+    mutate(cluster = NA) 
+  clustered_data[rownames(data_to_cluster), "cluster"] <- kmeans_result$cluster
+  
+  if (visualize) {
+    print(fviz_nbclust(data_to_cluster, kmeans, method = "wss") + 
+            ggtitle("Optimal Number of Clusters - WSS Method"))
+    
+    print(fviz_cluster(kmeans_result, data = data_to_cluster) + 
+            ggtitle(paste("K-Means Clustering with K =", K)))
+  }
+  
+  return(list(clustered_data = clustered_data, kmeans_result = kmeans_result))
+}
+columns_to_cluster <- c("Population", "Income2", "Income")
+
+result1 <- automate_kmeans(K = 4, data = acs_il_t, visualize = FALSE)
+result2 <- automate_kmeans(K = 4, data = acs_il_t, columns_to_cluster = columns_to_cluster, visualize = TRUE)
+
+clustered_data <- result1$clustered_data
+
+kmeans_result <- result1$kmeans_result
+
+K_values <- 4:7
+cluster_results <- lapply(K_values, function(K) automate_kmeans(K = K, data = acs_il_t, visualize = FALSE))
+
+acs_il_t$k_4 <- cluster_results[[1]]$clustered_data$cluster
+acs_il_t$k_5 <- cluster_results[[2]]$clustered_data$cluster
+acs_il_t$k_6 <- cluster_results[[3]]$clustered_data$cluster
+acs_il_t$k_7 <- cluster_results[[4]]$clustered_data$cluster
+head(acs_il_t, 5)
+
